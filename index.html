@@ -76,8 +76,10 @@
   #map{ display:block; width:134px; height:200px; }
 
   #subtitle{ position:absolute; left:50%; bottom:9.5%; transform:translateX(-50%); text-align:center;
-    max-width:min(720px,84vw); font-size:14.5px; line-height:1.55; color:rgba(255,255,255,0);
-    transition:color 1s; text-shadow:0 2px 7px #000, 0 0 18px rgba(0,0,0,.8); font-style:italic; }
+    max-width:min(720px,84vw); font-size:14.5px; line-height:1.55; color:rgba(255,255,255,.88);
+    opacity:0; transition:opacity 1s; text-shadow:0 2px 7px #000, 0 0 18px rgba(0,0,0,.8);
+    font-style:italic; }
+  #subtitle.on{ opacity:1; }
 
   /* ---- title card: a backlit mall directory ---- */
   #overlay{ position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; cursor:pointer;
@@ -129,7 +131,8 @@
   <div id="hint">
     <b>W A S D</b> walk <span class="sep">·</span> <b>SHIFT</b> run <span class="sep">·</span> <b>ESC</b> pause<br>
     <b>N</b> after hours <span class="sep">·</span> <b>M</b> mute <span class="sep">·</span> <b>P</b> page<br>
-    <b>B</b> beach ball <span class="sep">·</span> <b>Y</b> frisbee <span class="sep">·</span> <b>G</b> water gun
+    <b>B</b> beach ball <span class="sep">·</span> <b>Y</b> frisbee <span class="sep">·</span> <b>G</b> water gun<br>
+    <b>[</b> <b>]</b> graphics quality
   </div>
   <div id="mapWrap"><div class="mt">YOU ARE HERE</div><canvas id="map" width="134" height="200"></canvas></div>
   <div id="powerWrap">
@@ -150,6 +153,7 @@
     <span><b>MOUSE</b> &nbsp;look</span><span><b>ESC</b> &nbsp;pause</span>
     <span><b>N</b> &nbsp;after hours</span><span><b>Z</b> &nbsp;&#9762; zombies</span>
     <span><b>M</b> &nbsp;mute</span><span><b>P</b> &nbsp;page the mall</span>
+    <span><b>[</b> <b>]</b> &nbsp;graphics quality</span><span><b>B Y G</b> &nbsp;toys</span>
   </div>
 </div></div>
 
@@ -201,6 +205,7 @@ function _toggleAfterHours(){
     if(skyMesh) skyMesh.material.color.setHex(0x1a2234);   // night sky through the glass
     if(_ceilMat){ _ceilMat.color.setHex(0x3c3a40); _ceilMat.emissiveIntensity=0.04; } // dim roof in night mode
     litMats.forEach(r=>r.m.color.copy(r.c).multiplyScalar(r.dim));
+    _setCrowdVisible(false);
     ahOverlay.classList.add('on');
     say('MALL CLOSED \u2014 AFTER HOURS',8000);
   } else {
@@ -212,11 +217,19 @@ function _toggleAfterHours(){
     if(skyMesh) skyMesh.material.color.setHex(0xffffff);
     if(_ceilMat){ _ceilMat.color.setHex(0xffffff); _ceilMat.emissiveIntensity=0.55; } // restore ceiling
     litMats.forEach(r=>r.m.color.copy(r.c));
+    _setCrowdVisible(true);
     ahOverlay.classList.remove('on');
   }
 }
 
 
+
+// Shoppers and diners are built much later in the file; this is called from the After Hours
+// toggle, which can only fire once everything exists.
+function _setCrowdVisible(v){
+  if(typeof _shoppers!=='undefined') for(const s of _shoppers) s.root.visible=v;
+  if(typeof _sitters!=='undefined')  for(const s of _sitters)  s.p.root.visible=v;
+}
 
 /* ====== ZOMBIE MODE (Z key) ====== */
 let _zombieMode=false;
@@ -384,15 +397,27 @@ document.getElementById('hud').appendChild(_zHud);
 const subEl=document.getElementById('subtitle'), loadbar=document.getElementById('loadbar');
 const floorTagEl=document.getElementById('floorTag'), mapWrapEl=document.getElementById('mapWrap'), hintEl=document.getElementById('hint');
 let _st=null;
-function say(t,h){ if(!subEl) return; subEl.textContent=t; subEl.style.color='rgba(255,255,255,.8)'; clearTimeout(_st); _st=setTimeout(()=>{ if(subEl) subEl.style.color='rgba(255,255,255,0)'; },h||5000); }
+function say(t,h){ if(!subEl) return; subEl.textContent=t; subEl.classList.add('on');
+  clearTimeout(_st); _st=setTimeout(()=>{ if(subEl) subEl.classList.remove('on'); },h||5000); }
 const mapCv=document.getElementById('map'), mapX=mapCv.getContext('2d');
 
 /* ---------------------------------------------------------------- renderer */
 const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
-renderer.setPixelRatio(Math.min(devicePixelRatio,1.75));
+/* ---- quality: the renderer is fill-bound, so resolution is the first dial ---- */
+const QUALITY=[
+  {name:'LOW',    dpr:0.75, lights:6 },
+  {name:'MEDIUM', dpr:1.15, lights:12},
+  {name:'HIGH',   dpr:1.60, lights:20},
+];
+let _qi=1, _dprMax=Math.min(devicePixelRatio||1,QUALITY[_qi].dpr), _dprCur=_dprMax;
+renderer.setPixelRatio(_dprCur);
 renderer.setSize(innerWidth,innerHeight);
 renderer.outputEncoding=THREE.sRGBEncoding;
-renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+/* The sun never moves and almost nothing that casts a shadow does either, so the shadow map
+   is rendered on demand rather than re-rendered every frame - that is a whole extra scene
+   pass removed from the steady state. PCF rather than PCFSoft: the soft variant takes many
+   more taps for a difference you cannot see at this shadow resolution. */
+renderer.shadowMap.enabled=false;   // nothing casts a real shadow map any more
 renderer.toneMapping=THREE.ACESFilmicToneMapping;   // exposure is set with the lighting rig below
 VIEW.appendChild(renderer.domElement);
 
@@ -876,8 +901,7 @@ scene.add(new THREE.HemisphereLight(0xbfd2e0,0x4a3320,0.26));   // cool skylight
 scene.add(new THREE.AmbientLight(0x2e2838,0.16));
 const sun=new THREE.DirectionalLight(0xffe2ac,1.45);
 sun.position.set(10,40,-46); sun.target.position.set(0,0,-50);
-sun.castShadow=true; sun.shadow.mapSize.set(2048,2048);
-Object.assign(sun.shadow.camera,{left:-30,right:30,top:30,bottom:-30,near:1,far:120}); sun.shadow.bias=-0.0004;
+sun.castShadow=false;   // see CONTACT SHADOWS below
 scene.add(sun); scene.add(sun.target);
 const atriumGlow=new THREE.PointLight(0xffe2b0,0.7,42,2); atriumGlow.position.set(0,LV[1],(AZ0+AZ1)/2); scene.add(atriumGlow);
 
@@ -1109,7 +1133,7 @@ function updateElevator(dt){
 }
 
 /* ============================== STOREFRONT ROWS (glass + interiors + signs) */
-let signIdx=0; const neonSigns=[];
+let signIdx=0, tenantIdx=0; const neonSigns=[];
 const _valRec=[], _pilRec=[];   // valances and pilasters repeat identically down every row
 const _refRec=[];               // floor reflections: {p, r, hue} per lit shopfront
 const mannequinSpots=[];        // display windows worth dressing (never a shuttered unit)
@@ -1146,7 +1170,8 @@ function storefrontRow(side,y){
     // neon sign — solid dark panel with glowing text (signTex has opaque background), no transparency depth issues
     const inEscZone=(z>-31&&z<-21)||(z>-79&&z<-69);
     if(!inEscZone){
-      const sign=new THREE.Mesh(new THREE.PlaneGeometry(6.2,1.05),lit(new THREE.MeshBasicMaterial({map:SIGN_TEXES[signIdx%SIGN_TEXES.length]}),0.16));
+      const sign=new THREE.Mesh(new THREE.PlaneGeometry(6.2,1.05),lit(new THREE.MeshBasicMaterial({map:SIGN_TEXES[tenantIdx%SIGN_TEXES.length]}),0.16));
+      tenantIdx++;
       sign.position.set(x-side*0.6,y+3.65,z); sign.rotateY(rotY); world.add(sign);
       neonSigns.push({m:sign.material, t:Math.random()*10, flick:Math.random()<0.25});
     } else {
@@ -1167,7 +1192,7 @@ function storefrontRow(side,y){
     // floor, and the thing a flat matte floor was missing most
     if(isLit && y===LV[0])
       _refRec.push({p:[x-side*2.6, y+0.012, z], r:side<0?Math.PI:0,
-                    hue:HUES[(signIdx%STORE_NAMES.length)%HUES.length]});
+                    hue:HUES[((tenantIdx-1+SIGN_TEXES.length)%SIGN_TEXES.length)%HUES.length]});
     unitN++; signIdx++;
   }
   // plain wall band above the shopfronts up to this floor's ceiling
@@ -1963,10 +1988,10 @@ fcPalm(-12,-73); fcPalm(12,-73);   // frame the food court entrance, not the sta
 (function(){
   const m=new THREE.MeshStandardMaterial({color:0x9e7d60,roughness:.75,metalness:.05});
   // cross-concourse accent band — south strip and north strip
-  [[-20,0.004],[-36,0.004],[-63,0.004]].forEach(([z,y])=>{ const s=new THREE.Mesh(new THREE.BoxGeometry(32,0.008,1.4),m); s.position.set(0,y,z); world.add(s); });
+  [[-20,0.010],[-36,0.010],[-63,0.010]].forEach(([z,y])=>{ const s=new THREE.Mesh(new THREE.BoxGeometry(32,0.008,1.4),m); s.position.set(0,y,z); world.add(s); });
   // thin parallel border strips flanking each
   const m2=new THREE.MeshStandardMaterial({color:0x7a5c40,roughness:.8,metalness:.05});
-  [-20,-36,-63].forEach(z=>{ ['n','s'].forEach(d=>{ const s=new THREE.Mesh(new THREE.BoxGeometry(32,0.008,0.3),m2); s.position.set(0,0.004,z+(d==='n'?-1.1:1.1)); world.add(s); }); });
+  [-20,-36,-63].forEach(z=>{ ['n','s'].forEach(d=>{ const s=new THREE.Mesh(new THREE.BoxGeometry(32,0.008,0.3),m2); s.position.set(0,0.010,z+(d==='n'?-1.1:1.1)); world.add(s); }); });
 })();
 let fountainSpray=null,fGeo=null,fPos=null,fVel=null,fSeed=null,fN=0,fWL=0.62;
 (function(){ const cz=(AZ0+AZ1)/2, WL=0.62; fWL=WL;
@@ -2293,6 +2318,50 @@ updateClocks();
   });
 })();
 
+/* ============================== LIGHT BUDGET
+   The mall ends up with ~52 point lights. Three.js forward-renders, so EVERY lit material's
+   fragment shader loops over every point light in the scene, for every pixel it covers - that
+   is the single largest cost in the frame, far more than the draw count.
+
+   Only a handful can actually reach the camera at any moment, so each frame we keep the N
+   best-scoring lights visible and hide the rest. An invisible light is skipped by
+   projectObject, so it leaves the shader entirely. The count is held CONSTANT, because the
+   light count is baked into the shader permutation and varying it would recompile every
+   program mid-frame. */
+const _budgetLights=[];
+let LIGHT_BUDGET=QUALITY[_qi].lights;
+function collectBudgetLights(){
+  scene.traverse(o=>{ if(o.isPointLight) _budgetLights.push(o); });
+  if(LIGHT_BUDGET>_budgetLights.length) LIGHT_BUDGET=_budgetLights.length;
+  _budgetLights.forEach((l,i)=>{ l.visible = i<LIGHT_BUDGET; });
+}
+const _lsScore=[], _lsIdx=[];
+function updateLightBudget(){
+  const N=_budgetLights.length; if(!N) return;
+  const cx=camera.position.x, cy=camera.position.y, cz=camera.position.z;
+  for(let i=0;i<N;i++){
+    const l=_budgetLights[i];
+    const dx=l.position.x-cx, dy=l.position.y-cy, dz=l.position.z-cz;
+    const d=Math.sqrt(dx*dx+dy*dy+dz*dz);
+    const range=l.distance||40;
+    // rank by rough contribution, not raw distance, so a big soft fill still wins over a
+    // nearby pinpoint that is about to fall off anyway
+    _lsScore[i]=l.intensity*Math.max(0,1-d/range);
+    _lsIdx[i]=i;
+  }
+  // partial selection of the top LIGHT_BUDGET - N is small, so this is cheaper than a sort
+  for(let k=0;k<LIGHT_BUDGET;k++){
+    let best=k;
+    for(let i=k+1;i<N;i++) if(_lsScore[_lsIdx[i]]>_lsScore[_lsIdx[best]]) best=i;
+    const t=_lsIdx[k]; _lsIdx[k]=_lsIdx[best]; _lsIdx[best]=t;
+  }
+  for(let i=0;i<N;i++){
+    const want=i<LIGHT_BUDGET;
+    const l=_budgetLights[_lsIdx[i]];
+    if(l.visible!==want) l.visible=want;
+  }
+}
+
 flushRailPosts();   // every railRun() in the build above is now queued
 flushLeaves();      // every canopy in the build above batches into one draw call
 
@@ -2465,6 +2534,38 @@ function _updateShoppers(dt){
   }
 }
 
+/* ============================== CONTACT SHADOWS
+   With the sun's shadow map gone, props need something to sit on or they float. Every piece
+   of furniture already declares a footprint as a collider, so derive a soft blob from that:
+   one instanced quad, no shadow pass, no boundary seam, and it costs a single draw call. */
+(function(){
+  function blobTex(){
+    const S=64,c=cvs(S,S),g=c.getContext('2d');
+    const gr=g.createRadialGradient(S/2,S/2,1,S/2,S/2,S/2);
+    gr.addColorStop(0.00,'rgba(0,0,0,0.55)');
+    gr.addColorStop(0.55,'rgba(0,0,0,0.28)');
+    gr.addColorStop(1.00,'rgba(0,0,0,0)');
+    g.fillStyle=gr; g.fillRect(0,0,S,S);
+    const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
+  }
+  const recs=[];
+  const FLOORS=[LV[0],LV[1],LV[2]];
+  for(const c of colliders){
+    const w=c.maxX-c.minX, d=c.maxZ-c.minZ;
+    if(w<0.3||d<0.3||w>4.5||d>4.5) continue;           // skip walls, rails and escalator skirts
+    let fy=null;
+    for(const f of FLOORS) if(Math.abs(c.yMin-f)<0.12) fy=f;
+    if(fy===null) continue;                            // only things actually standing on a floor
+    recs.push({p:[(c.minX+c.maxX)/2, fy+0.013, (c.minZ+c.maxZ)/2], s:[w*1.5,1,d*1.5]});
+  }
+  const g=new THREE.PlaneGeometry(1,1); g.rotateX(-Math.PI/2);
+  const m=instanceAll(g,new THREE.MeshBasicMaterial({map:blobTex(),transparent:true,
+    depthWrite:false,toneMapped:false,opacity:0.75}),recs);
+  if(m) m.renderOrder=1;                               // under the reflection decals
+})();
+
+collectBudgetLights();
+
 /* ====================================================== PLAYER + INPUT */
 const keys={};
 const player={ pos:new THREE.Vector3(0,0,4), vel:new THREE.Vector3(), feetY:0, velY:0, onGround:true,
@@ -2509,6 +2610,8 @@ addEventListener('keydown',e=>{ keys[e.code]=true;
     camera.add(_discHandMesh); }
   if(e.code==='KeyG'){ _gunOn=!_gunOn; _gunTimer=0; gunHudEl.classList.toggle('on',_gunOn); }
   if(e.code==='KeyM') toggleMute();
+  if(e.code==='BracketLeft')  applyQuality(_qi-1);
+  if(e.code==='BracketRight') applyQuality(_qi+1);
   if(e.code==='KeyP'&&AC) announce(); });
 addEventListener('keyup',  e=>{ keys[e.code]=false;
   if(e.code==='KeyY'&&_discCharging){
@@ -2944,7 +3047,7 @@ function drawMap(){ const W=mapCv.width,H=mapCv.height; mapX.clearRect(0,0,W,H);
   mapX.textAlign='left'; mapX.font='bold 7px "Trebuchet MS",sans-serif';
   mapX.fillStyle='#c9a04e'; mapX.fillText(['GROUND','LEVEL 1','LEVEL 2'][fl],pad,H-2);
   mapX.textAlign='right'; mapX.fillStyle='rgba(83,216,224,.8)';
-  mapX.fillText('N \u2191',W-pad,H-2);
+  mapX.fillText('N \u2193',W-pad,H-2);   // this plan puts SOUTH at the top, so north is down
 }
 
 /* ================================================================= RENDER */
@@ -3034,7 +3137,7 @@ function frame(){ requestAnimationFrame(frame);
   camera.lookAt(camera.position.x-Math.sin(player.yaw)*cp, camera.position.y+sp, camera.position.z-Math.cos(player.yaw)*cp);
   const lvl=player.feetY>LV[2]-1?'LEVEL 2':player.feetY>LV[1]-1?'LEVEL 1':'GROUND FLOOR';
   if(floorTagEl.textContent!==lvl) floorTagEl.textContent=lvl;
-  if(playing){ _updateShoppers(dt); updateSpatial(); }
+  if(playing){ if(!_afterHours) _updateShoppers(dt); updateSpatial(); }
   clockAcc+=dt; if(clockAcc>1){ clockAcc=0; updateClocks(); }
   for(const b of sunShafts){ b.rotation.y=Math.atan2(camera.position.x-b.position.x, camera.position.z-b.position.z); }
   const a=dust.geometry.attributes.position.array; for(let i=0;i<DUST_N;i++){ a[i*3+1]-=0.0013; if(a[i*3+1]<0.1)a[i*3+1]=TOP; }
@@ -3210,13 +3313,42 @@ function frame(){ requestAnimationFrame(frame);
       if(fPos[i*3+1]<fWL+0.05) fSeed(i); }
     fGeo.attributes.position.needsUpdate=true; }
   mapAcc+=dt; if(playing&&mapAcc>=0.067){ mapAcc=0; drawMap(); }   // ~15fps throttle — the minimap barely changes per frame
+  updateLightBudget();
+  updatePerf(dt);
   renderer.render(scene,camera);
 }
-addEventListener('resize',()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+/* ---- adaptive resolution ----
+   Resolution is the cheapest dial on a fill-bound renderer, and a Retina panel asks for ~4x
+   the pixels of a 1x one. Watch the real frame time and walk the device pixel ratio up or
+   down to hold the target, with a cooldown so it settles instead of oscillating. */
+let _ftAcc=0,_ftN=0,_dprCool=0,_perfHud=0;
+function updatePerf(dt){
+  _ftAcc+=dt; _ftN++; _dprCool-=dt;
+  if(_ftN<45) return;
+  const avg=_ftAcc/_ftN; _ftAcc=0; _ftN=0;
+  if(_dprCool>0) return;
+  let next=_dprCur;
+  if(avg>0.0215 && _dprCur>0.70) next=Math.max(0.70,+(_dprCur-0.2).toFixed(2));
+  else if(avg<0.0125 && _dprCur<_dprMax) next=Math.min(_dprMax,+(_dprCur+0.2).toFixed(2));
+  if(next!==_dprCur){
+    _dprCur=next; renderer.setPixelRatio(_dprCur); renderer.setSize(innerWidth,innerHeight); _dprCool=2.5;
+  }
+}
+function applyQuality(i){
+  _qi=(i+QUALITY.length)%QUALITY.length;
+  const q=QUALITY[_qi];
+  _dprMax=Math.min(devicePixelRatio||1,q.dpr); _dprCur=_dprMax;
+  renderer.setPixelRatio(_dprCur); renderer.setSize(innerWidth,innerHeight);
+  LIGHT_BUDGET=Math.min(q.lights,_budgetLights.length);
+  say('GRAPHICS: '+q.name,2200);
+}
+addEventListener('resize',()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight); });
 /* dev-only inspection hook (opt in with #dev) — used by the screenshot harness */
 if(location.hash==='#dev') window.__dbg={player,scene,camera,renderer,LV,TOP,colliders,surfaces,
   get AC(){return AC;}, get busMusic(){return busMusic;}, get busPA(){return busPA;}, announce:()=>announce(),
-  shoppers:_shoppers, sitters:_sitters, get spatial(){return _spatial;}};
+  shoppers:_shoppers, sitters:_sitters, get spatial(){return _spatial;},
+  setBudget:n=>{ LIGHT_BUDGET=Math.max(0,Math.min(n,_budgetLights.length)); }, applyQuality};
 let lp=0; const li=setInterval(()=>{ lp=Math.min(100,lp+14+Math.random()*18); loadbar.style.width=lp+'%';
   if(lp>=100){ clearInterval(li); setTimeout(()=>loadbar.style.opacity=0,300);} },70);
 frame();
